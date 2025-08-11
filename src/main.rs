@@ -1,5 +1,7 @@
 use notify::{
-    event::{AccessKind, CreateKind, DataChange, Event, EventKind, ModifyKind, RemoveKind, RenameMode},
+    event::{
+        AccessKind, CreateKind, DataChange, Event, EventKind, ModifyKind, RemoveKind, RenameMode,
+    },
     RecommendedWatcher, RecursiveMode, Result, Watcher,
 };
 use std::path::Path;
@@ -36,12 +38,15 @@ fn main() -> Result<()> {
 
     // The `move` keyword before the closure is crucial. It tells the closure
     // to take ownership of `tx`, which it needs to send events to the main thread.
-    let mut watcher: RecommendedWatcher = RecommendedWatcher::new(move |res: Result<Event>| {
-        // We just forward the event/error to the main thread.
-        // `unwrap()` is fine here because the receiver `rx` will not be dropped
-        // before the sender `tx` is.
-        tx.send(res).unwrap();
-    }, config)?;
+    let mut watcher: RecommendedWatcher = RecommendedWatcher::new(
+        move |res: Result<Event>| {
+            // We just forward the event/error to the main thread.
+            // `unwrap()` is fine here because the receiver `rx` will not be dropped
+            // before the sender `tx` is.
+            tx.send(res).unwrap();
+        },
+        config,
+    )?;
 
     // --- 4. Start Watching ---
     // We want to watch all files and folders *inside* the specified path,
@@ -71,7 +76,10 @@ fn main() -> Result<()> {
 fn handle_event(event: &Event) {
     // The `event.kind` tells us what happened.
     // The `event.paths` tells us where it happened.
-    let path = event.paths.first().map_or("N/A", |p| p.to_str().unwrap_or("Invalid UTF-8"));
+    let path = event
+        .paths
+        .first()
+        .map_or("N/A", |p| p.to_str().unwrap_or("Invalid UTF-8"));
 
     match &event.kind {
         // --- Creation Events ---
