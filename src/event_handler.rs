@@ -63,6 +63,8 @@ fn run_git_commit() {
 
             if output.status.success() {
                 println!("[SUCCESS] Committed changes:\n{}", stdout);
+                println!("-> Running: git commit -m \"Update\"");
+                let _ = Command::new("git").arg("push").output();
             } else {
                 // `git commit` fails if there's nothing to commit. This is not a
                 // critical error, so we check for that specific message.
