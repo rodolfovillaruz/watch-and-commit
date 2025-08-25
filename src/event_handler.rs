@@ -37,7 +37,7 @@ fn run_git_commit() {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!("[ERROR] `git add .` failed:\n{}", stderr);
-                return; // Stop if 'git add' fails
+                return;
             }
             println!("[SUCCESS] Staged changes.");
         }
@@ -63,17 +63,30 @@ fn run_git_commit() {
 
             if output.status.success() {
                 println!("[SUCCESS] Committed changes:\n{}", stdout);
-                println!("-> Running: git commit -m \"Update\"");
-                let _ = Command::new("git").arg("push").output();
+                println!("-> Running: git push");
+                let push_output = Command::new("git").arg("push").output();
+
+                match push_output {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+
+                        if output.status.success() {
+                            println!("[SUCCESS] Pushed changes:\n{}", stdout);
+                        } else {
+                            eprintln!("[ERROR] `git push` failed:\n{}", stderr);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[ERROR] Failed to execute `git push`: {}", e);
+                    }
+                }
             } else {
-                // `git commit` fails if there's nothing to commit. This is not a
-                // critical error, so we check for that specific message.
                 if stderr.contains("nothing to commit")
                     || stderr.contains("no changes added to commit")
                 {
                     println!("[INFO] No new changes to commit.");
                 } else {
-                    // It was a different, real error.
                     eprintln!("[ERROR] `git commit` failed:\n{}", stderr);
                 }
             }
