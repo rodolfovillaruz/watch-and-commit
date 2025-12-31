@@ -1,7 +1,7 @@
 // src/event_handler.rs
 
 use notify::event::{AccessKind, CreateKind, Event, EventKind, ModifyKind, RemoveKind, RenameMode};
-use std::process::Command; // Import the Command module
+use std::process::Command;
 
 /// A helper function to neatly print details about a batch of file system events
 /// and then execute the git commit action.
@@ -14,13 +14,11 @@ pub fn handle_events(events: &[Event]) {
     println!("✅ DEBOUNCED ACTION! Processing {} events...", events.len());
     println!("=======================================================");
 
-    // Log the individual events that triggered this action
     for event in events {
         handle_single_event(event);
     }
     println!("-------------------------------------------------------");
 
-    // Execute the git commands
     println!("🚀 Executing git auto-commit...");
     run_git_commit();
     println!("-------------------------------------------------------\n");
@@ -43,12 +41,25 @@ fn run_git_commit() {
         }
         Err(e) => {
             eprintln!("[ERROR] Failed to execute `git add .`: {}", e);
-            eprintln!("        Ensure 'git' is installed and in your system's PATH.");
             return;
         }
     }
 
-    // --- Step 2: git commit -m "Update" ---
+    // --- Step 2: Check if there are actually changes to commit ---
+    // `git diff --cached --quiet` returns Exit Code 1 if changes exist, and 0 if clean.
+    // This is language-agnostic and faster than parsing stdout.
+    let has_changes = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .status()
+        .map(|status| !status.success()) // If success (0), no changes. If fail (1), changes exist.
+        .unwrap_or(false); // If command fails to run, assume no changes to be safe.
+
+    if !has_changes {
+        println!("[INFO] No changes detected in index. Skipping commit.");
+        return;
+    }
+
+    // --- Step 3: git commit -m "Update" ---
     println!("-> Running: git commit -m \"Update\"");
     let commit_output = Command::new("git")
         .arg("commit")
@@ -58,37 +69,31 @@ fn run_git_commit() {
 
     match commit_output {
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
             if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 println!("[SUCCESS] Committed changes:\n{}", stdout);
+
+                // --- Step 4: git push ---
                 println!("-> Running: git push");
                 let push_output = Command::new("git").arg("push").output();
 
                 match push_output {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-
-                        if output.status.success() {
-                            println!("[SUCCESS] Pushed changes:\n{}", stdout);
+                    Ok(p_out) => {
+                        if p_out.status.success() {
+                            println!("[SUCCESS] Pushed changes.");
                         } else {
-                            eprintln!("[ERROR] `git push` failed:\n{}", stderr);
+                            eprintln!(
+                                "[ERROR] `git push` failed:\n{}",
+                                String::from_utf8_lossy(&p_out.stderr)
+                            );
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[ERROR] Failed to execute `git push`: {}", e);
-                    }
+                    Err(e) => eprintln!("[ERROR] Failed to execute `git push`: {}", e),
                 }
             } else {
-                if stderr.contains("nothing to commit")
-                    || stderr.contains("no changes added to commit")
-                {
-                    println!("[INFO] No new changes to commit.");
-                } else {
-                    eprintln!("[ERROR] `git commit` failed:\n{}", stderr);
-                }
+                // Since we checked for changes in Step 2, any error here is a REAL error.
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[ERROR] `git commit` failed:\n{}", stderr);
             }
         }
         Err(e) => {
