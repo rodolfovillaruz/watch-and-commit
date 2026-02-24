@@ -19,6 +19,22 @@ fn run_git(args: &[&str]) -> Result<(bool, String, String), Box<dyn std::error::
     Ok((output.status.success(), stdout, stderr))
 }
 
+/// Runs a git command with specific environment overrides (or removals).
+fn run_git_env(
+    args: &[&str],
+    env_remove: &[&str],
+) -> Result<(bool, String, String), Box<dyn std::error::Error>> {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    for var in env_remove {
+        cmd.env_remove(var);
+    }
+    let output = cmd.output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((output.status.success(), stdout, stderr))
+}
+
 fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
     let work_tree = std::env::var("GIT_WORK_TREE").ok();
     let git_dir = std::env::var("GIT_DIR").ok();
@@ -45,7 +61,10 @@ fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
     if !gd_path.join("HEAD").exists() {
         println!("   Initialising bare repository at: {}", git_dir);
         std::fs::create_dir_all(gd_path)?;
-        let (ok, _, stderr) = run_git(&["init", "--bare", &git_dir])?;
+        // `git init --bare` must not see GIT_WORK_TREE or GIT_DIR — they
+        // conflict with --bare initialisation.
+        let (ok, _, stderr) =
+            run_git_env(&["init", "--bare", &git_dir], &["GIT_WORK_TREE", "GIT_DIR"])?;
         if !ok {
             return Err(format!("Failed to init bare repository: {}", stderr.trim()).into());
         }
