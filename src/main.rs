@@ -19,11 +19,83 @@ fn run_git(args: &[&str]) -> Result<(bool, String, String), Box<dyn std::error::
     Ok((output.status.success(), stdout, stderr))
 }
 
+/// Ensures the working environment is properly initialised.
+///
+/// When `GIT_WORK_TREE` (the saves directory) does not exist, it is created
+/// and a bare git repository is initialised at `GIT_DIR` (if not already
+/// present), with an empty initial commit so the watcher has a valid baseline.
+fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
+    let work_tree = std::env::var("GIT_WORK_TREE").ok();
+    let git_dir = std::env::var("GIT_DIR").ok();
+
+    // Only perform auto-init when both GIT_WORK_TREE and GIT_DIR are set.
+    // If they are not set, git will use its default discovery and we fall
+    // through to the normal preflight checks.
+    let (work_tree, git_dir) = match (work_tree, git_dir) {
+        (Some(wt), Some(gd)) => (wt, gd),
+        _ => return Ok(()),
+    };
+
+    let wt_path = Path::new(&work_tree);
+    let gd_path = Path::new(&git_dir);
+
+    if wt_path.exists() {
+        return Ok(());
+    }
+
+    println!(
+        "📁 Work tree '{}' does not exist. Initialising environment...",
+        work_tree
+    );
+
+    // --- Create the work tree directory ---
+    std::fs::create_dir_all(wt_path)?;
+    println!("   Created work tree directory: {}", work_tree);
+
+    // --- Initialise a bare git repository at GIT_DIR if it doesn't already exist ---
+    if !gd_path.join("HEAD").exists() {
+        println!("   Initialising bare repository at: {}", git_dir);
+        let (ok, _, stderr) = run_git(&["init", "--bare", &git_dir])?;
+        if !ok {
+            return Err(format!("Failed to init bare repository: {}", stderr.trim()).into());
+        }
+    } else {
+        println!(
+            "   Bare repository already exists at: {}",
+            git_dir
+        );
+    }
+
+    // --- Create an empty initial commit so the repo has a valid HEAD ---
+    // We need to check whether there are any commits yet.
+    let (has_commits, _, _) = run_git(&["rev-parse", "HEAD"]);
+    let has_commits = has_commits.unwrap_or(false);
+
+    if !has_commits {
+        println!("   Creating initial empty commit...");
+
+        // Use `git commit --allow-empty` to create a root commit.
+        let (ok, _, stderr) =
+            run_git(&["commit", "--allow-empty", "-m", "Initial commit (auto-created by watcher)"])?;
+        if !ok {
+            return Err(
+                format!("Failed to create initial commit: {}", stderr.trim()).into(),
+            );
+        }
+        println!("   ✅ Bare repository initialised with an empty commit.");
+    }
+
+    Ok(())
+}
+
 /// Performs pre-flight checks to ensure the repository is in a clean and synced state.
 /// 1. No tracked changes (staged or unstaged).
 /// 2. No untracked files.
 /// 3. After fetching, HEAD is in sync with the remote tracking branch.
 fn preflight_checks() -> Result<(), Box<dyn std::error::Error>> {
+    // --- Check 0: Auto-initialise if work tree is missing ---
+    ensure_repo_initialised()?;
+
     // --- Check 1: Ensure we are in a git repository ---
     let (ok, _, stderr) = run_git(&["rev-parse", "--is-inside-work-tree"])?;
     if !ok {
@@ -77,84 +149,87 @@ fn preflight_checks() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- Check 4: Fetch from remote ---
-    println!("Fetching from remote...");
-    let (ok, _, stderr) = run_git(&["fetch"])?;
-    if !ok {
-        return Err(format!("Failed to fetch from remote: {}", stderr.trim()).into());
-    }
-    println!("Fetch complete.");
+    // Only attempt fetch if a remote is configured.
+    let (has_remote, remotes, _) = run_git(&["remote"])?;
+    if has_remote && !remotes.trim().is_empty() {
+        println!("Fetching from remote...");
+        let (ok, _, stderr) = run_git(&["fetch"])?;
+        if !ok {
+            return Err(format!("Failed to fetch from remote: {}", stderr.trim()).into());
+        }
+        println!("Fetch complete.");
 
-    // --- Check 5: Ensure HEAD is in sync with the upstream tracking branch ---
-    // Get the current branch's upstream ref (e.g., "origin/main").
-    let (ok, upstream, stderr) =
-        run_git(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])?;
-    if !ok {
-        // No upstream configured — warn but allow (user might set it up later).
-        let trimmed = stderr.trim();
-        if trimmed.contains("no upstream configured")
-            || trimmed.contains("does not point to a branch")
-        {
-            println!(
-                "[WARNING] No upstream tracking branch configured. Skipping sync check.\n\
-                 Consider running: git branch --set-upstream-to=origin/<branch>"
+        // --- Check 5: Ensure HEAD is in sync with the upstream tracking branch ---
+        let (ok, upstream, stderr) =
+            run_git(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])?;
+        if !ok {
+            let trimmed = stderr.trim();
+            if trimmed.contains("no upstream configured")
+                || trimmed.contains("does not point to a branch")
+            {
+                println!(
+                    "[WARNING] No upstream tracking branch configured. Skipping sync check.\n\
+                     Consider running: git branch --set-upstream-to=origin/<branch>"
+                );
+                return Ok(());
+            }
+            return Err(format!(
+                "Failed to determine upstream tracking branch: {}",
+                trimmed
+            )
+            .into());
+        }
+        let upstream = upstream.trim();
+
+        let (_, local_hash, _) = run_git(&["rev-parse", "HEAD"])?;
+        let (_, remote_hash, _) = run_git(&["rev-parse", &format!("{}", upstream)])?;
+        let local_hash = local_hash.trim();
+        let remote_hash = remote_hash.trim();
+
+        if local_hash != remote_hash {
+            let (_, ahead_str, _) = run_git(&[
+                "rev-list",
+                "--count",
+                &format!("{}..HEAD", upstream),
+            ])?;
+            let (_, behind_str, _) = run_git(&[
+                "rev-list",
+                "--count",
+                &format!("HEAD..{}", upstream),
+            ])?;
+            let ahead: usize = ahead_str.trim().parse().unwrap_or(0);
+            let behind: usize = behind_str.trim().parse().unwrap_or(0);
+
+            let mut msg = format!(
+                "HEAD is not in sync with upstream '{}':\n",
+                upstream
             );
-            return Ok(());
+            msg.push_str(&format!("  Local:  {}\n", local_hash));
+            msg.push_str(&format!("  Remote: {}\n", remote_hash));
+            if ahead > 0 && behind > 0 {
+                msg.push_str(&format!(
+                    "  Branch has DIVERGED: {} commit(s) ahead, {} commit(s) behind.\n",
+                    ahead, behind
+                ));
+                msg.push_str("  Please rebase or merge to reconcile.");
+            } else if ahead > 0 {
+                msg.push_str(&format!("  Local is {} commit(s) AHEAD of remote.\n", ahead));
+                msg.push_str("  Please push your changes before running the watcher.");
+            } else if behind > 0 {
+                msg.push_str(&format!(
+                    "  Local is {} commit(s) BEHIND remote.\n",
+                    behind
+                ));
+                msg.push_str("  Please pull the latest changes before running the watcher.");
+            }
+            return Err(msg.into());
         }
-        return Err(format!(
-            "Failed to determine upstream tracking branch: {}",
-            trimmed
-        )
-        .into());
-    }
-    let upstream = upstream.trim();
 
-    // Get the commit hashes for HEAD and the upstream.
-    let (_, local_hash, _) = run_git(&["rev-parse", "HEAD"])?;
-    let (_, remote_hash, _) = run_git(&["rev-parse", &format!("{}", upstream)])?;
-    let local_hash = local_hash.trim();
-    let remote_hash = remote_hash.trim();
-
-    if local_hash != remote_hash {
-        // Determine the relationship: ahead, behind, or diverged.
-        let (_, ahead_str, _) = run_git(&[
-            "rev-list",
-            "--count",
-            &format!("{}..HEAD", upstream),
-        ])?;
-        let (_, behind_str, _) = run_git(&[
-            "rev-list",
-            "--count",
-            &format!("HEAD..{}", upstream),
-        ])?;
-        let ahead: usize = ahead_str.trim().parse().unwrap_or(0);
-        let behind: usize = behind_str.trim().parse().unwrap_or(0);
-
-        let mut msg = format!(
-            "HEAD is not in sync with upstream '{}':\n",
-            upstream
-        );
-        msg.push_str(&format!("  Local:  {}\n", local_hash));
-        msg.push_str(&format!("  Remote: {}\n", remote_hash));
-        if ahead > 0 && behind > 0 {
-            msg.push_str(&format!(
-                "  Branch has DIVERGED: {} commit(s) ahead, {} commit(s) behind.\n",
-                ahead, behind
-            ));
-            msg.push_str("  Please rebase or merge to reconcile.");
-        } else if ahead > 0 {
-            msg.push_str(&format!("  Local is {} commit(s) AHEAD of remote.\n", ahead));
-            msg.push_str("  Please push your changes before running the watcher.");
-        } else if behind > 0 {
-            msg.push_str(&format!(
-                "  Local is {} commit(s) BEHIND remote.\n",
-                behind
-            ));
-            msg.push_str("  Please pull the latest changes before running the watcher.");
-        }
-        return Err(msg.into());
+        println!("✅ Repository is clean and in sync with '{}'.", upstream);
+    } else {
+        println!("✅ Repository is clean. No remote configured — skipping sync check.");
     }
 
-    println!("✅ Repository is clean and in sync with '{}'.", upstream);
     Ok(())
 }
 
