@@ -75,23 +75,6 @@ fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Create an empty initial commit if there are no commits yet
-    let has_commits = run_git(&["rev-parse", "HEAD"])
-        .map(|(ok, _, _)| ok)
-        .unwrap_or(false);
-
-    if !has_commits {
-        println!("   Creating initial empty commit...");
-        let (ok, _, stderr) =
-            run_git(&["commit", "--allow-empty", "-m", "Initial commit (auto-created by watcher)"])?;
-        if !ok {
-            return Err(
-                format!("Failed to create initial commit: {}", stderr.trim()).into(),
-            );
-        }
-        println!("   ✅ Bare repository initialised with an empty commit.");
-    }
-
     Ok(())
 }
 
