@@ -19,18 +19,10 @@ fn run_git(args: &[&str]) -> Result<(bool, String, String), Box<dyn std::error::
     Ok((output.status.success(), stdout, stderr))
 }
 
-/// Ensures the working environment is properly initialised.
-///
-/// When `GIT_WORK_TREE` (the saves directory) does not exist, it is created
-/// and a bare git repository is initialised at `GIT_DIR` (if not already
-/// present), with an empty initial commit so the watcher has a valid baseline.
 fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
     let work_tree = std::env::var("GIT_WORK_TREE").ok();
     let git_dir = std::env::var("GIT_DIR").ok();
 
-    // Only perform auto-init when both GIT_WORK_TREE and GIT_DIR are set.
-    // If they are not set, git will use its default discovery and we fall
-    // through to the normal preflight checks.
     let (work_tree, git_dir) = match (work_tree, git_dir) {
         (Some(wt), Some(gd)) => (wt, gd),
         _ => return Ok(()),
@@ -39,22 +31,20 @@ fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
     let wt_path = Path::new(&work_tree);
     let gd_path = Path::new(&git_dir);
 
-    if wt_path.exists() {
-        return Ok(());
+    // Create work tree if missing
+    if !wt_path.exists() {
+        println!(
+            "📁 Work tree '{}' does not exist. Creating...",
+            work_tree
+        );
+        std::fs::create_dir_all(wt_path)?;
+        println!("   Created work tree directory: {}", work_tree);
     }
 
-    println!(
-        "📁 Work tree '{}' does not exist. Initialising environment...",
-        work_tree
-    );
-
-    // --- Create the work tree directory ---
-    std::fs::create_dir_all(wt_path)?;
-    println!("   Created work tree directory: {}", work_tree);
-
-    // --- Initialise a bare git repository at GIT_DIR if it doesn't already exist ---
+    // Initialise bare repo if GIT_DIR doesn't look like a valid repo
     if !gd_path.join("HEAD").exists() {
         println!("   Initialising bare repository at: {}", git_dir);
+        std::fs::create_dir_all(gd_path)?;
         let (ok, _, stderr) = run_git(&["init", "--bare", &git_dir])?;
         if !ok {
             return Err(format!("Failed to init bare repository: {}", stderr.trim()).into());
@@ -66,16 +56,13 @@ fn ensure_repo_initialised() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // --- Create an empty initial commit so the repo has a valid HEAD ---
-    // We need to check whether there are any commits yet.
+    // Create an empty initial commit if there are no commits yet
     let has_commits = run_git(&["rev-parse", "HEAD"])
         .map(|(ok, _, _)| ok)
         .unwrap_or(false);
 
     if !has_commits {
         println!("   Creating initial empty commit...");
-
-        // Use `git commit --allow-empty` to create a root commit.
         let (ok, _, stderr) =
             run_git(&["commit", "--allow-empty", "-m", "Initial commit (auto-created by watcher)"])?;
         if !ok {
