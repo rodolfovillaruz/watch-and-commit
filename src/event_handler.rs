@@ -46,13 +46,11 @@ fn run_git_commit() {
     }
 
     // --- Step 2: Check if there are actually changes to commit ---
-    // `git diff --cached --quiet` returns Exit Code 1 if changes exist, and 0 if clean.
-    // This is language-agnostic and faster than parsing stdout.
     let has_changes = Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .status()
-        .map(|status| !status.success()) // If success (0), no changes. If fail (1), changes exist.
-        .unwrap_or(false); // If command fails to run, assume no changes to be safe.
+        .map(|status| !status.success())
+        .unwrap_or(false);
 
     if !has_changes {
         println!("[INFO] No changes detected in index. Skipping commit.");
@@ -73,7 +71,21 @@ fn run_git_commit() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 println!("[SUCCESS] Committed changes:\n{}", stdout);
 
-                // --- Step 4: git push ---
+                // --- Step 4: Check if remote exists before pushing ---
+                let has_remote = Command::new("git")
+                    .args(["remote"])
+                    .output()
+                    .map(|output| {
+                        output.status.success() && !output.stdout.is_empty()
+                    })
+                    .unwrap_or(false);
+
+                if !has_remote {
+                    println!("[INFO] No remote configured. Skipping push.");
+                    return;
+                }
+
+                // --- Step 5: git push (only if remote exists) ---
                 println!("-> Running: git push");
                 let push_output = Command::new("git").arg("push").output();
 
@@ -91,7 +103,6 @@ fn run_git_commit() {
                     Err(e) => eprintln!("[ERROR] Failed to execute `git push`: {}", e),
                 }
             } else {
-                // Since we checked for changes in Step 2, any error here is a REAL error.
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!("[ERROR] `git commit` failed:\n{}", stderr);
             }
