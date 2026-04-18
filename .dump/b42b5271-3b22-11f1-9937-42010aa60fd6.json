@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "```Cargo.toml\n[package]\nname = \"auto-git\"\nversion = \"1.0.0\"\nedition = \"2024\"\n\n[dependencies]\nnotify = \"8.2.0\"\ntokio = { version = \"1.47.1\", features = [\"full\"] }\n\n```\n\n- Add more info for publishing to crates.io\n- Upon installed, the cli tool would be \"ag\"\n"
+  },
+  {
+    "role": "assistant",
+    "content": "```toml\n[package]\nname = \"auto-git\"\nversion = \"1.0.0\"\nedition = \"2024\"\nauthors = [\"Your Name <you@example.com>\"]\ndescription = \"A CLI tool that automatically stages and commits file changes using a filesystem watcher\"\ndocumentation = \"https://docs.rs/auto-git\"\nhomepage = \"https://github.com/you/auto-git\"\nrepository = \"https://github.com/you/auto-git\"\nreadme = \"README.md\"\nlicense = \"MIT\"\nkeywords = [\"git\", \"automation\", \"watcher\", \"cli\", \"commit\"]\ncategories = [\"command-line-utilities\", \"development-tools\"]\nexclude = [\".github/\", \"tests/\", \".gitignore\"]\n\n[[bin]]\nname = \"ag\"\npath = \"src/main.rs\"\n\n[dependencies]\nnotify = \"8.2.0\"\ntokio = { version = \"1.47.1\", features = [\"full\"] }\n```\n\nKey additions explained:\n\n| Field | Purpose |\n|---|---|\n| `authors` | Shows ownership on crates.io |\n| `description` | **Required** for publishing — shown in search results |\n| `documentation` | Links to docs.rs (auto-generated) |\n| `homepage` / `repository` | Source links on crates.io |\n| `readme` | Renders `README.md` on the crates.io page |\n| `license` | **Required** for publishing |\n| `keywords` | Up to 5 — improves discoverability |\n| `categories` | Crates.io browse categories (must match [valid list](https://crates.io/category_slugs)) |\n| `exclude` | Keeps the published crate lean |\n| `[[bin]] name = \"ag\"` | Sets the installed binary name to `ag` |\n\n> After publishing, users run `cargo install auto-git` and the binary available will be `ag`."
+  }
+]

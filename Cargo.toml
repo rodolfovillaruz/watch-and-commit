@@ -1,7 +1,21 @@
 [package]
-name = "auto-git"
+name = "watch-and-commit"
 version = "1.0.0"
 edition = "2024"
+authors = ["Rodolfo Villaruz <rodolfo@yes.ph>"]
+description = "A CLI tool that automatically stages and commits file changes using a filesystem watcher"
+documentation = "https://docs.rs/watch-and-commit"
+homepage = "https://github.com/rodolfovillaruz/watch-and-commit"
+repository = "https://github.com/rodolfovillaruz/watch-and-commit"
+readme = "README.md"
+license = "MIT"
+keywords = ["git", "automation", "watcher", "cli", "commit"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".github/", "tests/", ".gitignore"]
+
+[[bin]]
+name = "wac"
+path = "src/main.rs"
 
 [dependencies]
 notify = "8.2.0"
